@@ -41,11 +41,11 @@ async function fetchSelfPrices() {
 
 export default async function handler(req, res) {
   // CORS (כדי שאפשר יהיה להריץ גם מהדפדפן אם תרצה)
-  const ORIGIN = process.env.PUBLIC_WEB_ORIGIN || '*';
-  res.setHeader('Access-Control-Allow-Origin', ORIGIN);
-  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') return res.status(200).end();
+ // const ORIGIN = process.env.PUBLIC_WEB_ORIGIN || '*';
+//  res.setHeader('Access-Control-Allow-Origin', ORIGIN);
+ // res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  //res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  //if (req.method === 'OPTIONS') return res.status(200).end();
 
   // אימות: או קריאת Cron של Vercel או Bearer secret
   const byCron = !!req.headers['x-vercel-cron'];
