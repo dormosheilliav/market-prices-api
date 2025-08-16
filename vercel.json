@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "crons": [
+    { "path": "/api/sync-base44", "schedule": "30 * * * 1-5" }
+  ]
+}
