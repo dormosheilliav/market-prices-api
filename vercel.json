@@ -1,6 +1,9 @@
 {
   "version": 2,
+  "functions": {
+    "api/*.js": { "runtime": "nodejs18.x" }
+  },
   "crons": [
-    { "path": "/api/sync-base44", "schedule": "30 * * * 1-5" }
+    { "path": "/api/sync-base44", "schedule": "0 8 * * *" }
   ]
 }
