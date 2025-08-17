@@ -1,16 +1,20 @@
-// /api/earnings.js — Vercel Serverless Function (Finnhub)
-// ENV חובה: FINNHUB_API_KEY
+// /api/earnings.js — Alpha Vantage
+// ENV חובה: ALPHAVANTAGE_API_KEY
 
 function parseHorizon(h) {
-  const v = (Array.isArray(h) ? h[0] : h) || "6m"; // ברירת מחדל נדיבה
+  const v = (Array.isArray(h) ? h[0] : h) || "6m";
   const m = String(v).toLowerCase().trim();
   if (m.endsWith("w")) return parseInt(m, 10) * 7;
   if (m.endsWith("d")) return parseInt(m, 10);
   if (m.endsWith("m")) return parseInt(m, 10) * 30;
   if (!isNaN(Number(m))) return Number(m);
-  return 180;
+  return 180; // ברירת מחדל
 }
-
+function alphaHorizon(days) {
+  if (days <= 100) return "3month";
+  if (days <= 200) return "6month";
+  return "12month";
+}
 function toISODate(d) { return d.toISOString().slice(0, 10); }
 function daysUntilUTC(dateStr) {
   if (!dateStr) return null;
@@ -19,15 +23,16 @@ function daysUntilUTC(dateStr) {
   const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   return Math.round((event.getTime() - todayUTC.getTime()) / 86400000);
 }
-function mapWhen(hour) {
-  const h = String(hour || "unknown").toLowerCase();
-  if (h === "bmo") return { whenShort: "BMO", whenLabel: "Before Market" };
-  if (h === "amc") return { whenShort: "AMC", whenLabel: "After Market" };
-  return { whenShort: "UNKNOWN", whenLabel: "Unknown" };
+function quarterFromDate(yyyy_mm_dd) {
+  if (!yyyy_mm_dd) return { q: null, y: null };
+  const [y, m] = yyyy_mm_dd.split("-").map(Number);
+  if (!y || !m) return { q: null, y: null };
+  const q = Math.floor((m - 1) / 3) + 1;
+  return { q, y };
 }
 
 export default async function handler(req, res) {
-  const ALLOW = "*"; // אפשר להגביל לדומיין ה-Base44 שלך
+  const ALLOW = "*"; // אפשר לשים פה את דומיין ה-Base44 שלך
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", ALLOW);
     res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
@@ -43,54 +48,63 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "Missing ?symbol=AAPL" }); return;
     }
     const symbol = Array.isArray(symbolParam) ? symbolParam[0] : symbolParam;
-    const horizonDays = parseHorizon(req.query.horizon);
-    const token = process.env.FINNHUB_API_KEY;
-    if (!token) { res.status(500).json({ error: "Missing FINNHUB_API_KEY env var" }); return; }
 
+    const key = process.env.ALPHAVANTAGE_API_KEY;
+    if (!key) { res.status(500).json({ error: "Missing ALPHAVANTAGE_API_KEY env var" }); return; }
+
+    const days = parseHorizon(req.query.horizon);
     const now = new Date();
-    const from = toISODate(now);
-    const to = toISODate(new Date(now.getTime() + horizonDays * 86400000));
+    const from = toISODate(now); // להשוואה (למרות שה-API לא מקבל from)
+    const h = alphaHorizon(days);
 
-    const calUrl = `https://finnhub.io/api/v1/calendar/earnings?symbol=${encodeURIComponent(symbol)}&from=${from}&to=${to}&token=${token}`;
-    const lastUrl = `https://finnhub.io/api/v1/stock/earnings?symbol=${encodeURIComponent(symbol)}&token=${token}`;
+    const calUrl = `https://www.alphavantage.co/query?function=EARNINGS_CALENDAR&symbol=${encodeURIComponent(symbol)}&horizon=${h}&apikey=${key}`;
+    const lastUrl = `https://www.alphavantage.co/query?function=EARNINGS&symbol=${encodeURIComponent(symbol)}&apikey=${key}`;
 
     const [calResp, lastResp] = await Promise.all([fetch(calUrl), fetch(lastUrl)]);
-    if (!calResp.ok) { res.status(502).json({ error: "Earnings calendar fetch failed", detail: await calResp.text() }); return; }
-    if (!lastResp.ok) { res.status(502).json({ error: "Earnings last results fetch failed", detail: await lastResp.text() }); return; }
 
-    const calJson = await calResp.json();   // { earningsCalendar: [...] }
-    const lastJson = await lastResp.json(); // array
+    const calJson = await calResp.json();
+    if (!calResp.ok || calJson?.Note || calJson?.Information || calJson?.["Error Message"]) {
+      res.status(502).json({ error: "EARNINGS_CALENDAR failed", detail: calJson?.Note || calJson?.Information || calJson?.["Error Message"] || (await calResp.text()) });
+      return;
+    }
+    const lastJson = await lastResp.json();
+    if (!lastResp.ok || lastJson?.Note || lastJson?.Information || lastJson?.["Error Message"]) {
+      res.status(502).json({ error: "EARNINGS failed", detail: lastJson?.Note || lastJson?.Information || lastJson?.["Error Message"] || (await lastResp.text()) });
+      return;
+    }
 
-    // האירוע הקרוב
+    // ---- הקרוב הבא ----
     const list = Array.isArray(calJson?.earningsCalendar) ? calJson.earningsCalendar : [];
     let next = { date: null, whenShort: "UNKNOWN", whenLabel: "Unknown", epsEstimate: null, quarter: null, year: null, daysUntilUTC: null };
     if (list.length) {
-      list.sort((a,b)=> (a.date > b.date ? 1 : -1));
-      const nearest = list.find(x => x.date >= from) || list[0];
-      const mapped = mapWhen(nearest?.hour);
+      // reportDate ascending
+      list.sort((a, b) => (a.reportDate > b.reportDate ? 1 : -1));
+      const nearest = list.find(x => x.reportDate >= from) || list[0];
+      const { q, y } = quarterFromDate(nearest?.fiscalDateEnding);
       next = {
-        date: nearest?.date || null,
-        whenShort: mapped.whenShort,
-        whenLabel: mapped.whenLabel,
-        epsEstimate: nearest?.epsEstimate ?? null,
-        quarter: nearest?.quarter ?? null,
-        year: nearest?.year ?? null,
-        daysUntilUTC: nearest?.date ? daysUntilUTC(nearest.date) : null,
+        date: nearest?.reportDate || null,
+        whenShort: "UNKNOWN",      // Alpha Vantage לא מחזיר BMO/AMC
+        whenLabel: "Unknown",
+        epsEstimate: nearest?.estimate != null ? Number(nearest.estimate) : null,
+        quarter: q,
+        year: y,
+        daysUntilUTC: nearest?.reportDate ? daysUntilUTC(nearest.reportDate) : null,
       };
     }
 
-    // התוצאות האחרונות
+    // ---- התוצאות האחרונות ----
     let last = {};
-    const arr = Array.isArray(lastJson) ? lastJson : [];
-    if (arr.length) {
-      arr.sort((a,b)=> (a.period > b.period ? -1 : 1));
-      const r = arr[0];
+    const qs = Array.isArray(lastJson?.quarterlyEarnings) ? lastJson.quarterlyEarnings : [];
+    if (qs.length) {
+      // חדש ביותר לפי reportedDate
+      qs.sort((a, b) => (a.reportedDate > b.reportedDate ? -1 : 1));
+      const r = qs[0];
       last = {
-        period: r?.period ?? null,
-        actual: r?.actual ?? null,
-        estimate: r?.estimate ?? null,
-        surprise: r?.surprise ?? null,
-        surprisePercent: r?.surprisePercent ?? null,
+        period: r?.fiscalDateEnding ?? null,
+        actual: r?.reportedEPS != null ? Number(r.reportedEPS) : null,
+        estimate: r?.estimatedEPS != null ? Number(r.estimatedEPS) : null,
+        surprise: r?.surprise != null ? Number(r.surprise) : null,
+        surprisePercent: r?.surprisePercentage != null ? Number(r.surprisePercentage) : null,
       };
     }
 
