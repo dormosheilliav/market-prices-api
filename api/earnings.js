@@ -42,7 +42,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", ALLOW);
   res.setHeader("Content-Type", "application/json; charset=utf-8");
 
-  try {
+  try { 
     const symbolParam = req.query.symbol;
     if (!symbolParam || (Array.isArray(symbolParam) && !symbolParam[0])) {
       res.status(400).json({ error: "Missing ?symbol=AAPL" }); return;
