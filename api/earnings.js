@@ -1,5 +1,5 @@
-// /api/earnings.js — Alpha Vantage
-// ENV חובה: ALPHAVANTAGE_API_KEY
+// /api/earnings.js — Alpha Vantage (calendar=CSV, earnings=JSON)
+// ENV: ALPHAVANTAGE_API_KEY (או ALPHA_VANTAGE_KEY)
 
 function parseHorizon(h) {
   const v = (Array.isArray(h) ? h[0] : h) || "6m";
@@ -8,7 +8,7 @@ function parseHorizon(h) {
   if (m.endsWith("d")) return parseInt(m, 10);
   if (m.endsWith("m")) return parseInt(m, 10) * 30;
   if (!isNaN(Number(m))) return Number(m);
-  return 180; // ברירת מחדל
+  return 180;
 }
 function alphaHorizon(days) {
   if (days <= 100) return "3month";
@@ -27,12 +27,48 @@ function quarterFromDate(yyyy_mm_dd) {
   if (!yyyy_mm_dd) return { q: null, y: null };
   const [y, m] = yyyy_mm_dd.split("-").map(Number);
   if (!y || !m) return { q: null, y: null };
-  const q = Math.floor((m - 1) / 3) + 1;
-  return { q, y };
+  return { q: Math.floor((m - 1) / 3) + 1, y };
+}
+
+// CSV parser קטן עם תמיכה במרכאות
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const next = text[i + 1];
+
+    if (c === '"' ) {
+      if (inQuotes && next === '"') { field += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (c === ',' && !inQuotes) {
+      row.push(field); field = "";
+    } else if ((c === '\n' || c === '\r') && !inQuotes) {
+      if (field.length || row.length) { row.push(field); rows.push(row); }
+      field = ""; row = [];
+      if (c === '\r' && next === '\n') i++; // CRLF
+    } else {
+      field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+
+  const header = rows[0].map(h => h.trim());
+  return rows.slice(1)
+    .filter(r => r.some(x => x && x.trim() !== ""))
+    .map(r => {
+      const obj = {};
+      for (let i = 0; i < header.length; i++) obj[header[i]] = (r[i] ?? "").trim();
+      return obj;
+    });
 }
 
 export default async function handler(req, res) {
-  const ALLOW = "*"; // אפשר לשים פה את דומיין ה-Base44 שלך
+  const ALLOW = "*";
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", ALLOW);
     res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
@@ -42,61 +78,65 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", ALLOW);
   res.setHeader("Content-Type", "application/json; charset=utf-8");
 
-  try { 
+  try {
     const symbolParam = req.query.symbol;
     if (!symbolParam || (Array.isArray(symbolParam) && !symbolParam[0])) {
       res.status(400).json({ error: "Missing ?symbol=AAPL" }); return;
     }
     const symbol = Array.isArray(symbolParam) ? symbolParam[0] : symbolParam;
 
-    const key = process.env.ALPHAVANTAGE_API_KEY;
-    if (!key) { res.status(500).json({ error: "Missing ALPHAVANTAGE_API_KEY env var" }); return; }
+    const key = process.env.ALPHAVANTAGE_API_KEY || process.env.ALPHA_VANTAGE_KEY;
+    if (!key) { res.status(500).json({ error: "Missing ALPHAVANTAGE_API_KEY or ALPHA_VANTAGE_KEY env var" }); return; }
 
     const days = parseHorizon(req.query.horizon);
     const now = new Date();
-    const from = toISODate(now); // להשוואה (למרות שה-API לא מקבל from)
+    const from = toISODate(now);
     const h = alphaHorizon(days);
 
     const calUrl = `https://www.alphavantage.co/query?function=EARNINGS_CALENDAR&symbol=${encodeURIComponent(symbol)}&horizon=${h}&apikey=${key}`;
     const lastUrl = `https://www.alphavantage.co/query?function=EARNINGS&symbol=${encodeURIComponent(symbol)}&apikey=${key}`;
 
-    const [calResp, lastResp] = await Promise.all([fetch(calUrl), fetch(lastUrl)]);
+    // ---- Calendar (CSV) ----
+    const calResp = await fetch(calUrl);
+    const calText = await calResp.text();
+    if (!calResp.ok) { res.status(502).json({ error: "EARNINGS_CALENDAR failed", detail: calText }); return; }
 
-    const calJson = await calResp.json();
-    if (!calResp.ok || calJson?.Note || calJson?.Information || calJson?.["Error Message"]) {
-      res.status(502).json({ error: "EARNINGS_CALENDAR failed", detail: calJson?.Note || calJson?.Information || calJson?.["Error Message"] || (await calResp.text()) });
+    // אם Alpha מחזירה הודעת שגיאה/Rate Limit – זה JSON עם Note/Information
+    if (calText.trim().startsWith("{")) {
+      const err = JSON.parse(calText);
+      res.status(502).json({ error: "EARNINGS_CALENDAR failed", detail: err.Note || err.Information || err["Error Message"] || err });
       return;
     }
+    const calRows = parseCSV(calText); // [{symbol,name,reportDate,fiscalDateEnding,estimate,currency}, ...]
+    // ---- Last earnings (JSON) ----
+    const lastResp = await fetch(lastUrl);
     const lastJson = await lastResp.json();
     if (!lastResp.ok || lastJson?.Note || lastJson?.Information || lastJson?.["Error Message"]) {
-      res.status(502).json({ error: "EARNINGS failed", detail: lastJson?.Note || lastJson?.Information || lastJson?.["Error Message"] || (await lastResp.text()) });
+      res.status(502).json({ error: "EARNINGS failed", detail: lastJson?.Note || lastJson?.Information || lastJson?.["Error Message"] || lastJson });
       return;
     }
 
-    // ---- הקרוב הבא ----
-    const list = Array.isArray(calJson?.earningsCalendar) ? calJson.earningsCalendar : [];
+    // הבא בתור
     let next = { date: null, whenShort: "UNKNOWN", whenLabel: "Unknown", epsEstimate: null, quarter: null, year: null, daysUntilUTC: null };
-    if (list.length) {
-      // reportDate ascending
-      list.sort((a, b) => (a.reportDate > b.reportDate ? 1 : -1));
-      const nearest = list.find(x => x.reportDate >= from) || list[0];
+    if (Array.isArray(calRows) && calRows.length) {
+      calRows.sort((a, b) => (a.reportDate > b.reportDate ? 1 : -1));
+      const nearest = calRows.find(x => x.reportDate >= from) || calRows[0];
       const { q, y } = quarterFromDate(nearest?.fiscalDateEnding);
       next = {
         date: nearest?.reportDate || null,
-        whenShort: "UNKNOWN",      // Alpha Vantage לא מחזיר BMO/AMC
+        whenShort: "UNKNOWN",         // Alpha Vantage לא מספקת BMO/AMC
         whenLabel: "Unknown",
-        epsEstimate: nearest?.estimate != null ? Number(nearest.estimate) : null,
+        epsEstimate: nearest?.estimate ? Number(nearest.estimate) : null,
         quarter: q,
         year: y,
         daysUntilUTC: nearest?.reportDate ? daysUntilUTC(nearest.reportDate) : null,
       };
     }
 
-    // ---- התוצאות האחרונות ----
+    // התוצאות האחרונות
     let last = {};
     const qs = Array.isArray(lastJson?.quarterlyEarnings) ? lastJson.quarterlyEarnings : [];
     if (qs.length) {
-      // חדש ביותר לפי reportedDate
       qs.sort((a, b) => (a.reportedDate > b.reportedDate ? -1 : 1));
       const r = qs[0];
       last = {
