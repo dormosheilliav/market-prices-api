@@ -1,9 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/**/*.js": { "runtime": "nodejs22.x" }
-  },
-  "crons": [
-    { "path": "/api/cron-dispatcher", "schedule": "*/15 * * * *" }
-  ]
+  "functions": { "api/**/*.js": { "runtime": "nodejs22.x" } }
+  // no "crons" on Hobby
 }
