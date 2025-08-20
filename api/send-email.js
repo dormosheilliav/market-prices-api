@@ -1,7 +1,45 @@
-// market-prices-api/api/send-email.js
 export default async function handler(req, res) {
+  // ===== OPTIONAL GET TEST (browser) =====
+  if (req.method === 'GET') {
+    if (process.env.ALLOW_GET_EMAIL_TEST !== 'true') {
+      return res.status(403).json({ error: 'GET test is disabled' });
+    }
+    const secret = req.query.secret;
+    if (secret !== process.env.EMAIL_GATEWAY_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const to = req.query.to || 'you@example.com';
+    const subject = req.query.subject || 'Gateway Test (GET)';
+    const html = `<h1>Test ✅</h1><p>GET test email from gateway.</p>`;
+
+    const { RESEND_API_KEY, EMAIL_FROM } = process.env;
+    if (!RESEND_API_KEY || !EMAIL_FROM) {
+      return res.status(500).json({ error: 'Missing env vars' });
+    }
+
+    const resp = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: EMAIL_FROM,
+        to: [to],
+        subject,
+        html,
+        text: html.replace(/<[^>]+>/g, ' ')
+      }),
+    });
+
+    const ok = resp.status >= 200 && resp.status < 300;
+    const detail = await resp.text().catch(() => '');
+    return res.status(ok ? 200 : resp.status).json(ok ? { ok: true } : { ok: false, detail });
+  }
+  // ===== END GET TEST =====
+
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
+    res.setHeader('Allow', ['POST', 'GET']);
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
