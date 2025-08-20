@@ -2,7 +2,7 @@
 export default async function handler(req, res) {
   const isCron = !!req.headers['x-vercel-cron'];
 
-  // בונה base URL תקין אם אין PUBLIC_API_ORIGIN
+  // Base URL אמין לריצה בסרוור
   const baseOrigin =
     (process.env.PUBLIC_API_ORIGIN && process.env.PUBLIC_API_ORIGIN.trim()) ||
     `${(req.headers['x-forwarded-proto'] || 'https')}://${req.headers.host}`;
@@ -13,16 +13,14 @@ export default async function handler(req, res) {
   const mm = nowIL.getMinutes();
   const cur = hh * 60 + mm;
 
-  // סבילות
-  const TOL = 8;
+  const TOL = 8; // דק׳
   const within = (H, M, tol = TOL) => Math.abs(cur - (H * 60 + M)) <= tol;
 
   const doPrices   = within(16, 30) || within(20, 0) || within(23, 0); // 16:30, 20:00, 23:00 IL
-  const doEarnings = within(18, 0);                                     // 18:00 IL (פעם ביום)
+  const doEarnings = within(18, 0);                                     // 18:00 IL
 
   const results = {};
 
-  // ---- סנכרון מחירים ----
   if (doPrices) {
     try {
       const r = await fetch(`${baseOrigin}/api/sync-base44?max_updates=300&concurrency=8`, {
@@ -40,7 +38,6 @@ export default async function handler(req, res) {
     }
   }
 
-  // ---- מריץ באצ'ים לדוחות ----
   if (doEarnings) {
     try {
       const r = await fetch(`${baseOrigin}/api/tasks/refresh-earnings?batch=60&horizon=12m`, { method: 'POST' });
