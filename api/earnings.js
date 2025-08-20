@@ -191,7 +191,9 @@ export default async function handler(req, res) {
       ? finnhubData.last
       : (alphaData?.last || {});
 
-    res.setHeader("Cache-Control", "s-maxage=120, stale-while-revalidate=300");
+    // *** CHANGED: קאש יומי, עם SWR ארוך
+res.setHeader("Cache-Control", "s-maxage=86400, stale-while-revalidate=86400");
+
     res.status(200).json({
       version: "v3-optional-alpha",
       providers: { haveFinnhub: !!FIN_KEY, haveAlpha: !!ALPHA_KEY },
