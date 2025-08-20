@@ -1,6 +1,12 @@
 {
   "version": 2,
   "crons": [
-    { "path": "/api/sync-base44", "schedule": "0 8 * * *" }
+    // Price sync — IL 16:30 / 20:00 / 23:00  (קיץ: UTC+3)
+    { "path": "/api/sync-base44", "schedule": "30 13 * * *" },
+    { "path": "/api/sync-base44", "schedule": "0 17 * * *" },
+    { "path": "/api/sync-base44", "schedule": "0 20 * * *" },
+
+    // Earnings refresh — IL 18:00 (קיץ: UTC+3)
+    { "path": "/api/tasks/refresh-earnings", "schedule": "0 15 * * *" }
   ]
 }
