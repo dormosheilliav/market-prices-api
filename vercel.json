@@ -1,12 +1,6 @@
 {
   "version": 2,
   "crons": [
-   
-    { "path": "/api/sync-base44", "schedule": "30 13 * * *" },
-    { "path": "/api/sync-base44", "schedule": "0 17 * * *" },
-    { "path": "/api/sync-base44", "schedule": "0 20 * * *" },
-
-   
-    { "path": "/api/tasks/refresh-earnings", "schedule": "0 15 * * *" }
+    { "path": "/api/cron-dispatcher", "schedule": "*/15 * * * *" }
   ]
 }
