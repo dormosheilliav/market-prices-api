@@ -2,6 +2,6 @@
   "version": 2,
   "crons": [
     { "path": "/api/cron-dispatcher",        "schedule": "*/15 * * * *" },
-    { "path": "/api/tasks/refresh-earnings", "schedule": "0 10 * * *" }
+   
   ]
 }
