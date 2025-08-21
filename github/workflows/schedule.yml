@@ -1,0 +1,16 @@
+name: Price sync schedule
+
+on:
+  schedule:
+    - cron: '30 13 * * *'   # 16:30 Israel
+    - cron: '0 17 * * *'    # 20:00 Israel
+    - cron: '0 20 * * *'    # 23:00 Israel
+  workflow_dispatch:        # מאפשר להריץ ידנית מהלשונית Actions
+
+jobs:
+  call_dispatcher:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit cron-dispatcher (price windows)
+        run: |
+          curl -sS "https://market-prices-api.vercel.app/api/cron-dispatcher"
