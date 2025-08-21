@@ -1,38 +1,59 @@
-// בתוך if (doPrices) { ... } ב- /api/cron-dispatcher.js
-try {
-  const base = process.env.PUBLIC_API_ORIGIN || '';
-  const secret = process.env.SYNC_SECRET || '';
+// api/cron-dispatcher.js
+export default async function handler(req, res) {
+  // Base URL (חייב מוחלט ל-fetch בצד שרת)
+  const host  = req.headers['x-forwarded-host'] || req.headers.host;
+  const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
+  const BASE  = (process.env.PUBLIC_API_ORIGIN && process.env.PUBLIC_API_ORIGIN.trim())
+    || `${proto}://${host}`;
 
-  // נניח בערך 2,600 – זה רק לצורך חלוקה לסגמנטים. אם בפועל יש פחות/יותר זה לא פוגע.
-  const TOTAL_APPROX = 2600;
-  const CHUNK_SIZE   = 150;   // המנה שאתה רוצה
-  const PER_RUN      = 4;     // כמה מנות בכל ריצה (כל 15 דק') => 600 בכל ריצה
-  const SEGMENT_SIZE = CHUNK_SIZE * PER_RUN;  // 600
+  const isCron = !!req.headers['x-vercel-cron'];
 
-  // חישוב "סגמנט" מתחלף לפי רבע-שעה כדי לכסות את הטווח לאורך הזמן
+  // שעה בישראל
   const nowIL = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-  const slot  = Math.floor(nowIL.getMinutes() / 15);         // 0..3
-  const segCount = Math.max(1, Math.ceil(TOTAL_APPROX / SEGMENT_SIZE)); // ≈5
-  const segIndex = ((nowIL.getHours() * 4) + slot) % segCount;
-  const baseOffset = segIndex * SEGMENT_SIZE;
+  const hh = nowIL.getHours(), mm = nowIL.getMinutes(), cur = hh*60+mm;
+  const TOL = 8; // טולרנס
+  const within = (H,M,t=TOL)=>Math.abs(cur-(H*60+M))<=t;
 
-  const offsets = Array.from({ length: PER_RUN }, (_, i) => baseOffset + i * CHUNK_SIZE);
+  const doPrices   = within(16,30) || within(20,0) || within(23,0);
+  const doEarnings = within(13,0); // התאמת שעת הרצת-דוחות אם תרצה
 
-  // מריצים את 4 הקריאות במקביל זהיר (או אחת אחרי השנייה – שניהם בסדר)
-  await Promise.allSettled(
-    offsets.map(off =>
-      fetch(`${base}/api/sync-base44?limit=${CHUNK_SIZE}&offset=${off}&concurrency=8`, {
+  const results = {};
+
+  if (doPrices) {
+    try {
+      const r = await fetch(`${BASE}/api/sync-base44?max_updates=300&concurrency=8`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${secret}`
+          'Authorization': `Bearer ${process.env.SYNC_SECRET || ''}`, // חייב להתאים למה שב- /api/sync-base44
         },
-        body: '{}'
-      })
-    )
-  );
+        body: JSON.stringify({})
+      });
+      const txt = await r.text();
+      results.prices = { status: r.status, body: tryJson(txt) };
+    } catch (err) {
+      results.prices = { error: String(err?.message || err) };
+    }
+  }
 
-  results.prices = { status: 200, detail: { baseOffset, offsets, chunk: CHUNK_SIZE } };
-} catch (err) {
-  results.prices = { error: String(err?.message || err) };
+  if (doEarnings) {
+    try {
+      const r = await fetch(`${BASE}/api/earnings?symbol=AAPL`);
+      const txt = await r.text();
+      results.earnings = { status: r.status, body: tryJson(txt) };
+    } catch (err) {
+      results.earnings = { error: String(err?.message || err) };
+    }
+  }
+
+  res.setHeader('Content-Type', 'application/json');
+  res.status(200).json({
+    ok: true,
+    isCron,
+    nowIL: nowIL.toISOString(),
+    triggered: { prices: !!doPrices, earnings: !!doEarnings },
+    results
+  });
 }
+
+function tryJson(s){ try{return s?JSON.parse(s):null;} catch {return s;} }
