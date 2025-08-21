@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "crons": [
-    { "path": "/api/cron-dispatcher", "schedule": "0 15 * * *" }
-  ]
+  "functions": {
+    "api/**/*.js": { "runtime": "nodejs22.x" }
+  }
 }
