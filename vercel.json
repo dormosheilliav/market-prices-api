@@ -1,6 +1,6 @@
 {
   "version": 2,
   "crons": [
-    { "path": "/api/cron-dispatcher", "schedule": "*/15 * * * *" }
+    { "path": "/api/cron-dispatcher", "schedule": "0 10 * * *" }
   ]
 }
