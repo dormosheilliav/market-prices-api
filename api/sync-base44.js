@@ -1,11 +1,22 @@
-// api/sync-base44.js  — Batch updates with offset/limit (cap=150)
+// api/sync-base44.js  — Batch updates with offset/limit (cap=150) + throttle/backoff
 
 const BASE44 = 'https://app.base44.com/api';
 
-// tiny sleep
+// ---------- helpers ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// CSV -> rows
+// --- Rate-limit: limit PUTs per second to Base44 (NEW) ---
+const RPS = Number(process.env.BASE44_RPS || '4'); // tweak via env if needed
+let lastTs = 0;
+async function rateLimit() {
+  const gap = Math.ceil(1000 / Math.max(1, RPS));
+  const now = Date.now();
+  const wait = Math.max(0, gap - (now - lastTs));
+  lastTs = now + wait;
+  if (wait) await sleep(wait);
+}
+
+// ---------- CSV -> rows ----------
 async function fetchSelfPrices() {
   const csvUrl = process.env.SHEET_CSV_URL;
   if (!csvUrl) throw new Error('SHEET_CSV_URL env is missing');
@@ -48,21 +59,34 @@ const norm = s => String(s||'').trim().toUpperCase()
   .replace(/^(NASDAQ:|NYSE:|AMEX:|BATS:|TASE:|TLV:|LON:)/,'')
   .replace(/\.(US|TA|L|AX|TO|HK)$/,'');
 
-// PUT with gentle retry
-async function putWithRetry(url, options, tries = 3) {
+// --- PUT with throttle + exponential backoff (REPLACED) ---
+async function putWithRetry(url, options, tries = 5) {
+  let backoff = 400; // ms
   for (let i = 0; i < tries; i++) {
+    await rateLimit(); // don't exceed RPS
     const res = await fetch(url, options);
     if (res.ok) return res;
-    if (res.status === 429 || res.status >= 500) {
-      await sleep(300 * (i + 1));
+
+    if (res.status === 429) {
+      const ra = Number(res.headers.get('retry-after')) || 0;
+      await sleep(ra ? ra * 1000 : backoff + Math.random() * 250);
+      backoff = Math.min(backoff * 2, 8000);
       continue;
     }
-    return res; // other 4xx – give up
+    if (res.status >= 500) {
+      await sleep(backoff);
+      backoff = Math.min(backoff * 2, 8000);
+      continue;
+    }
+    // other 4xx – give up
+    return res;
   }
+  // last attempt
+  await rateLimit();
   return fetch(url, options);
 }
 
-// simple concurrency pool
+// ---------- simple concurrency pool ----------
 async function runPool(items, worker, concurrency) {
   let i = 0, active = 0, ok = 0;
   return new Promise((resolve) => {
@@ -95,11 +119,11 @@ export default async function handler(req, res) {
   // Params
   const url = new URL(req.url || '', 'http://localhost');
 
-  const limit      = Math.min(150, Math.max(1, Number(url.searchParams.get('limit') || '150'))); // hard cap=150
-  const offset     = Math.max(0, Number(url.searchParams.get('offset') || '0'));
-  const dry        = url.searchParams.get('dry_run') === '1';
-  const force      = url.searchParams.get('force') === '1';
-  const concurrency= Math.max(1, Number(url.searchParams.get('concurrency') || '6'));
+  const limit       = Math.min(150, Math.max(1, Number(url.searchParams.get('limit') || '150'))); // hard cap=150
+  const offset      = Math.max(0, Number(url.searchParams.get('offset') || '0'));
+  const dry         = url.searchParams.get('dry_run') === '1';
+  const force       = url.searchParams.get('force') === '1';
+  const concurrency = Math.max(1, Number(url.searchParams.get('concurrency') || '3')); // softer default (CHANGED)
   const tickersParam = url.searchParams.get('tickers') || '';
   const filterTickers = tickersParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   const allow = filterTickers.length ? new Set(filterTickers.map(norm)) : null;
